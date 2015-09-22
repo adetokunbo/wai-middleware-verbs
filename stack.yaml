@@ -1,0 +1,6 @@
+flags: {}
+packages:
+- '.'
+extra-deps:
+  - wai-transformers-0.0.1
+resolver: nightly-2015-09-20
