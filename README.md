@@ -1,31 +1,42 @@
-# wai-middleware-verbs
+wai-middleware-verbs
+====================
 
-TODO: Write description here
-
-## Installation
-
-TODO: Write installation instructions here
+Route to different Wai middleware based on the incoming HTTP verb
+detected.
 
 ## Usage
 
-### Creating `x`
+This library depends on the [wai-transformers](https://hackage.haskell.org/package/wai-transformers)
+package - we expect middleware to already be lifted to `MiddlewareT m`.
 
-TODO: Write usage instructions here
+As an example, here could be your application:
 
-### Combining `x`
+```haskell
+import Network.Wai.Trans
+import Network.Wai.Middleware.Verbs
 
-TODO: Write usage instructions here
 
-### Consuming `x`
+myMid1 :: MiddlewareT (ReaderT Env m)
+myMid2 :: Middleware
 
-TODO: Write usage instructions here
+uploader :: Request -> m (Maybe u)
+uploader _ = return Nothing
 
-## How to run tests
+uploadResponse :: Maybe u -> MiddlewareT m
+uploadResponse _ = liftMiddleware (\t -> runReaderT t config) myMid2
 
+verbRoutes :: VerbListenerT (MiddlewareT m) u m ()
+verbRoutes = do
+  get myMid1
+  post uploader uploadResponse
 ```
-cabal configure --enable-tests && cabal build && cabal test
+
+Then, to use your newly assembled verb-router, turn the Verbs into a Middleware:
+
+```haskell
+verbMid :: MiddlewareT (ReaderT Env m)
+verbMid = verbsToMiddleware verbRoutes
 ```
 
-## Contributing
-
-TODO: Write contribution instructions here
+From there, you can deconstruct your monolithic monad stack back down to `IO`,
+and plug-it-in to your existing middleware.
