@@ -5,7 +5,28 @@
   , TupleSections
   #-}
 
-module Network.Wai.Middleware.Verbs where
+module Network.Wai.Middleware.Verbs
+  ( Verbs (..)
+  , Verb
+  , getVerb
+  , HandleUpload
+  , Respond
+  , ResponseSpec
+  , supplyReq
+  , lookupVerb
+  , lookupVerbM
+  , VerbListenerT (..)
+  , execVerbListenerT
+  , verbsToMiddleware
+  , get
+  , getReq
+  , post
+  , postReq
+  , put
+  , putReq
+  , delete
+  , deleteReq
+  ) where
 
 
 import           Network.Wai.Trans
@@ -16,9 +37,11 @@ import           Data.Bifunctor
 import           Data.Map (Map)
 import qualified Data.Map                             as Map
 import           Data.Maybe (fromMaybe)
+import           Data.Monoid
 import           Control.Monad.Trans
 import           Control.Monad.Trans.Maybe
-import           Control.Monad.Writer
+import           Control.Monad.State hiding (get, put)
+import qualified Control.Monad.State                  as S
 import           Control.Error.Util
 
 
@@ -70,16 +93,16 @@ lookupVerbM v req vmap = runMaybeT $ do
 -- * Verb Writer
 
 newtype VerbListenerT r u m a =
-  VerbListenerT { runVerbListenerT :: WriterT (Verbs u m r) m a }
+  VerbListenerT { runVerbListenerT :: StateT (Verbs u m r) m a }
     deriving ( Functor
              , Applicative
              , Monad
-             , MonadWriter (Verbs u m r)
+             , MonadState (Verbs u m r)
              , MonadIO
              )
 
 execVerbListenerT :: Monad m => VerbListenerT r u m a -> m (Verbs u m r)
-execVerbListenerT = execWriterT . runVerbListenerT
+execVerbListenerT xs = execStateT (runVerbListenerT xs) mempty
 
 
 instance MonadTrans (VerbListenerT r u) where
@@ -104,14 +127,14 @@ verbsToMiddleware vl app req respond = do
 -- | For simple @GET@ responses
 get :: ( Monad m
        ) => r -> VerbListenerT r u m ()
-get r = tell $ Verbs $ Map.singleton GET ( const $ return Nothing
+get r = tell' $ Verbs $ Map.singleton GET ( const $ return Nothing
                                          , const $ const r
                                          )
 
 -- | Inspect the @Request@ object supplied by WAI
 getReq :: ( Monad m
           ) => (Request -> r) -> VerbListenerT r u m ()
-getReq r = tell $ Verbs $ Map.singleton GET ( const $ return Nothing
+getReq r = tell' $ Verbs $ Map.singleton GET ( const $ return Nothing
                                             , const . r)
 
 
@@ -119,7 +142,7 @@ getReq r = tell $ Verbs $ Map.singleton GET ( const $ return Nothing
 post :: ( Monad m
         , MonadIO m
         ) => HandleUpload m u -> (Maybe u -> r) -> VerbListenerT r u m ()
-post handle r = tell $ Verbs $ Map.singleton POST ( handle
+post handle r = tell' $ Verbs $ Map.singleton POST ( handle
                                                   , const r
                                                   )
 
@@ -127,7 +150,7 @@ post handle r = tell $ Verbs $ Map.singleton POST ( handle
 postReq :: ( Monad m
            , MonadIO m
            ) => HandleUpload m u -> (Request -> Maybe u -> r) -> VerbListenerT r u m ()
-postReq handle r = tell $ Verbs $ Map.singleton POST ( handle
+postReq handle r = tell' $ Verbs $ Map.singleton POST ( handle
                                                      , r
                                                      )
 
@@ -136,7 +159,7 @@ postReq handle r = tell $ Verbs $ Map.singleton POST ( handle
 put :: ( Monad m
        , MonadIO m
        ) => HandleUpload m u -> (Maybe u -> r) -> VerbListenerT r u m ()
-put handle r = tell $ Verbs $ Map.singleton PUT ( handle
+put handle r = tell' $ Verbs $ Map.singleton PUT ( handle
                                                 , const r
                                                 )
 
@@ -144,7 +167,7 @@ put handle r = tell $ Verbs $ Map.singleton PUT ( handle
 putReq :: ( Monad m
           , MonadIO m
           ) => HandleUpload m u -> (Request -> Maybe u -> r) -> VerbListenerT r u m ()
-putReq handle r = tell $ Verbs $ Map.singleton PUT ( handle
+putReq handle r = tell' $ Verbs $ Map.singleton PUT ( handle
                                                    , r
                                                    )
 
@@ -152,13 +175,19 @@ putReq handle r = tell $ Verbs $ Map.singleton PUT ( handle
 -- | For simple @DELETE@ responses
 delete :: ( Monad m
           ) => r -> VerbListenerT r u m ()
-delete r = tell $ Verbs $ Map.singleton DELETE ( const $ return Nothing
+delete r = tell' $ Verbs $ Map.singleton DELETE ( const $ return Nothing
                                                , const $ const r
                                                )
 
 -- | Inspect the @Request@ object supplied by WAI
 deleteReq :: ( Monad m
              ) => (Request -> r) -> VerbListenerT r u m ()
-deleteReq r = tell $ Verbs $ Map.singleton DELETE ( const $ return Nothing
+deleteReq r = tell' $ Verbs $ Map.singleton DELETE ( const $ return Nothing
                                                   , const . r
                                                   )
+
+
+tell' :: (Monoid w, MonadState w m) => w -> m ()
+tell' x = do
+  xs <- S.get
+  S.put $ xs <> x
