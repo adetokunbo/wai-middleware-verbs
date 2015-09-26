@@ -17,6 +17,7 @@ module Network.Wai.Middleware.Verbs
   , lookupVerbM
   , VerbListenerT (..)
   , execVerbListenerT
+  , mapVerbs
   , verbsToMiddleware
   , get
   , getReq
@@ -124,6 +125,12 @@ verbsToMiddleware vl app req respond = do
     middleware <- mMiddleware
     return $ middleware app req respond
 
+mapVerbs :: Monad m =>
+            (a -> b)
+         -> VerbListenerT a e u m () -> VerbListenerT b e u m ()
+mapVerbs f vl = do
+  vmap <- lift $ execVerbListenerT vl
+  tell' $ f <$> vmap
 
 -- * Combinators
 
