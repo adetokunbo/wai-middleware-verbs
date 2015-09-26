@@ -10,7 +10,7 @@ module Network.Wai.Middleware.Verbs
   , Verb
   , getVerb
   , HandleUpload
-  , Respond
+  , RespondUpload
   , ResponseSpec
   , supplyReq
   , lookupVerb
@@ -36,20 +36,25 @@ import           Data.Function.Syntax
 import           Data.Bifunctor
 import           Data.Map (Map)
 import qualified Data.Map                             as Map
-import           Data.Maybe (fromMaybe)
 import           Data.Monoid
 import           Control.Monad.Trans
 import           Control.Monad.Trans.Maybe
 import           Control.Monad.State hiding (get, put)
 import qualified Control.Monad.State                  as S
-import           Control.Error.Util
+import           Control.Monad.Except
+import           Control.Error
 
 
 -- * Verb Map
 
-newtype Verbs u m r = Verbs
-  { unVerbs :: Map Verb (ResponseSpec u m r)
+type HandleUpload e m u   = Request -> ExceptT (Maybe e) m u
+type RespondUpload e u r        = Request -> Either (Maybe e) u -> r
+type ResponseSpec e u m r = (HandleUpload e m u, RespondUpload e u r)
+
+newtype Verbs e u m r = Verbs
+  { unVerbs :: Map Verb (ResponseSpec e u m r)
   } deriving (Monoid)
+
 
 type Verb = StdMethod
 
@@ -63,55 +68,53 @@ getVerb req = fromMaybe GET $ httpMethodToMSym $ requestMethod req
                        | x == methodDelete = Just DELETE
                        | otherwise        = Nothing
 
-type HandleUpload m u   = Request -> m (Maybe u)
-type Respond u r        = Request -> Maybe u -> r
-type ResponseSpec u m r = (HandleUpload m u, Respond u r)
-
-
 supplyReq :: Request
-          -> Map Verb (ResponseSpec u m r)
-          -> Map Verb (m (Maybe u), Maybe u -> r)
+          -> Map Verb (ResponseSpec e u m r)
+          -> Map Verb (ExceptT (Maybe e) m u, Either (Maybe e) u -> r)
 supplyReq req xs = bimap ($ req) ($ req) <$> xs
 
-instance Functor (Verbs u m) where
+instance Functor (Verbs e u m) where
   fmap f (Verbs xs) = Verbs $ (second (f .*)) <$> xs
 
 
 -- | Take a verb map and a request, and return the lookup after providing the request
 -- (for upload cases).
-lookupVerb :: Verb -> Request -> Verbs u m r -> Maybe (m (Maybe u), Maybe u -> r)
+lookupVerb :: Verb
+           -> Request
+           -> Verbs e u m r
+           -> Maybe (ExceptT (Maybe e) m u, Either (Maybe e) u -> r)
 lookupVerb v req vmap = Map.lookup v $ supplyReq req $ unVerbs vmap
 
 
-lookupVerbM :: Monad m => Verb -> Request -> Verbs u m r -> m (Maybe r)
+lookupVerbM :: Monad m => Verb -> Request -> Verbs e u m r -> m (Maybe r)
 lookupVerbM v req vmap = runMaybeT $ do
-  (mUM, mUtoResult) <- hoistMaybe $ lookupVerb v req vmap
-  mU <- lift mUM
-  return $ mUtoResult mU
+  (uploadT, result) <- hoistMaybe $ lookupVerb v req vmap
+  eUpload <- lift $ runExceptT uploadT
+  return $ result eUpload
 
 
 -- * Verb Writer
 
-newtype VerbListenerT r u m a =
-  VerbListenerT { runVerbListenerT :: StateT (Verbs u m r) m a }
+newtype VerbListenerT r e u m a =
+  VerbListenerT { runVerbListenerT :: StateT (Verbs e u m r) m a }
     deriving ( Functor
              , Applicative
              , Monad
-             , MonadState (Verbs u m r)
+             , MonadState (Verbs e u m r)
              , MonadIO
              )
 
-execVerbListenerT :: Monad m => VerbListenerT r u m a -> m (Verbs u m r)
+execVerbListenerT :: Monad m => VerbListenerT r e u m a -> m (Verbs e u m r)
 execVerbListenerT xs = execStateT (runVerbListenerT xs) mempty
 
 
-instance MonadTrans (VerbListenerT r u) where
+instance MonadTrans (VerbListenerT r e u) where
   lift ma = VerbListenerT $ lift ma
 
 
 
 verbsToMiddleware :: MonadIO m =>
-                     VerbListenerT (MiddlewareT m) u m ()
+                     VerbListenerT (MiddlewareT m) e u m ()
                   -> MiddlewareT m
 verbsToMiddleware vl app req respond = do
   let v = getVerb req
@@ -126,65 +129,66 @@ verbsToMiddleware vl app req respond = do
 
 -- | For simple @GET@ responses
 get :: ( Monad m
-       ) => r -> VerbListenerT r u m ()
-get r = tell' $ Verbs $ Map.singleton GET ( const $ return Nothing
-                                         , const $ const r
-                                         )
+       ) => r -> VerbListenerT r e u m ()
+get r = tell' $ Verbs $ Map.singleton GET ( const $ throwError Nothing
+                                          , const $ const r
+                                          )
 
 -- | Inspect the @Request@ object supplied by WAI
 getReq :: ( Monad m
-          ) => (Request -> r) -> VerbListenerT r u m ()
-getReq r = tell' $ Verbs $ Map.singleton GET ( const $ return Nothing
-                                            , const . r)
+          ) => (Request -> r) -> VerbListenerT r e u m ()
+getReq r = tell' $ Verbs $ Map.singleton GET ( const $ throwError Nothing
+                                             , const . r
+                                             )
 
 
 -- | For simple @POST@ responses
 post :: ( Monad m
         , MonadIO m
-        ) => HandleUpload m u -> (Maybe u -> r) -> VerbListenerT r u m ()
+        ) => HandleUpload e m u -> (Either (Maybe e) u -> r) -> VerbListenerT r e u m ()
 post handle r = tell' $ Verbs $ Map.singleton POST ( handle
-                                                  , const r
-                                                  )
+                                                   , const r
+                                                   )
 
 -- | Inspect the @Request@ object supplied by WAI
 postReq :: ( Monad m
            , MonadIO m
-           ) => HandleUpload m u -> (Request -> Maybe u -> r) -> VerbListenerT r u m ()
+           ) => HandleUpload e m u -> RespondUpload e u r -> VerbListenerT r e u m ()
 postReq handle r = tell' $ Verbs $ Map.singleton POST ( handle
-                                                     , r
-                                                     )
+                                                      , r
+                                                      )
 
 
 -- | For simple @PUT@ responses
 put :: ( Monad m
        , MonadIO m
-       ) => HandleUpload m u -> (Maybe u -> r) -> VerbListenerT r u m ()
+       ) => HandleUpload e m u -> (Either (Maybe e) u -> r) -> VerbListenerT r e u m ()
 put handle r = tell' $ Verbs $ Map.singleton PUT ( handle
-                                                , const r
-                                                )
+                                                 , const r
+                                                 )
 
 -- | Inspect the @Request@ object supplied by WAI
 putReq :: ( Monad m
           , MonadIO m
-          ) => HandleUpload m u -> (Request -> Maybe u -> r) -> VerbListenerT r u m ()
+          ) => HandleUpload e m u -> RespondUpload e u r -> VerbListenerT r e u m ()
 putReq handle r = tell' $ Verbs $ Map.singleton PUT ( handle
-                                                   , r
-                                                   )
+                                                    , r
+                                                    )
 
 
 -- | For simple @DELETE@ responses
 delete :: ( Monad m
-          ) => r -> VerbListenerT r u m ()
-delete r = tell' $ Verbs $ Map.singleton DELETE ( const $ return Nothing
-                                               , const $ const r
-                                               )
+          ) => r -> VerbListenerT r e u m ()
+delete r = tell' $ Verbs $ Map.singleton DELETE ( const $ throwError Nothing
+                                                , const $ const r
+                                                )
 
 -- | Inspect the @Request@ object supplied by WAI
 deleteReq :: ( Monad m
-             ) => (Request -> r) -> VerbListenerT r u m ()
-deleteReq r = tell' $ Verbs $ Map.singleton DELETE ( const $ return Nothing
-                                                  , const . r
-                                                  )
+             ) => (Request -> r) -> VerbListenerT r e u m ()
+deleteReq r = tell' $ Verbs $ Map.singleton DELETE ( const $ throwError Nothing
+                                                   , const . r
+                                                   )
 
 
 tell' :: (Monoid w, MonadState w m) => w -> m ()
