@@ -46,10 +46,16 @@ import           Control.Monad.Except
 import           Control.Error
 
 
--- * Verb Map
+-- * Types
 
+-- | Given a request, either throw a possibly existent error, or create some
+-- upload result.
 type HandleUpload e m u   = Request -> ExceptT (Maybe e) m u
-type RespondUpload e u r        = Request -> Either (Maybe e) u -> r
+
+-- | Given a request and the potential result of handling an upload, return a
+-- response (usually @Middleware@).
+type RespondUpload e u r  = Request -> Either (Maybe e) u -> r
+
 type ResponseSpec e u m r = (HandleUpload e m u, RespondUpload e u r)
 
 newtype Verbs e u m r = Verbs
@@ -69,6 +75,7 @@ getVerb req = fromMaybe GET $ httpMethodToMSym $ requestMethod req
                        | x == methodDelete = Just DELETE
                        | otherwise        = Nothing
 
+-- | @flip ($)@ for supplying a @Request@ into the two @ResponseSpec@ functions.
 supplyReq :: Request
           -> Map Verb (ResponseSpec e u m r)
           -> Map Verb (ExceptT (Maybe e) m u, Either (Maybe e) u -> r)
@@ -86,7 +93,7 @@ lookupVerb :: Verb
            -> Maybe (ExceptT (Maybe e) m u, Either (Maybe e) u -> r)
 lookupVerb v req vmap = Map.lookup v $ supplyReq req $ unVerbs vmap
 
-
+-- | Take the monadic partial result of @lookupVerb@, and actually handle the upload.
 lookupVerbM :: Monad m => Verb -> Request -> Verbs e u m r -> m (Maybe r)
 lookupVerbM v req vmap = runMaybeT $ do
   (uploadT, result) <- hoistMaybe $ lookupVerb v req vmap
@@ -96,6 +103,9 @@ lookupVerbM v req vmap = runMaybeT $ do
 
 -- * Verb Writer
 
+-- | The type variables are @r@ for the result, @e@ for the error type throwable
+-- during uploading, @u@ is the sucessful upload type, and @m@ and @a@ form the
+-- last two parts of the monad transformer.
 newtype VerbListenerT r e u m a =
   VerbListenerT { runVerbListenerT :: StateT (Verbs e u m r) m a }
     deriving ( Functor
@@ -113,7 +123,7 @@ instance MonadTrans (VerbListenerT r e u) where
   lift ma = VerbListenerT $ lift ma
 
 
-
+-- | Turn a map from HTTP verbs to middleware, into a middleware.
 verbsToMiddleware :: MonadIO m =>
                      VerbListenerT (MiddlewareT m) e u m ()
                   -> MiddlewareT m
