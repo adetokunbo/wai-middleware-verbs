@@ -5,21 +5,24 @@
   , TupleSections
   #-}
 
+{-|
+Module      : Network.Wai.Middleware.Verbs
+Copyright   : (c) Athan Clark, 2015
+License     : BSD-3
+Maintainer  : athan.clark@gmail.com
+Stability   : experimental
+Portability : POSIX
+
+This module provides everything you need to route based off different HTTP verbs.
+The <#g:1 Combinators> section defines the @get@, @post@ and other functions you would
+expect in a toolset like this. Likewise, we also include tools for manually
+looking into the <#t:VerbListenerT VerbListenerT> object constructed from the combinators, and
+turning it directly into a WAI @MiddlewareT@.
+-}
+
 module Network.Wai.Middleware.Verbs
-  ( Verbs (..)
-  , Verb
-  , getVerb
-  , HandleUpload
-  , RespondUpload
-  , ResponseSpec
-  , supplyReq
-  , lookupVerb
-  , lookupVerbM
-  , VerbListenerT (..)
-  , execVerbListenerT
-  , mapVerbs
-  , verbsToMiddleware
-  , get
+  ( -- * Combinators
+    get
   , getReq
   , post
   , postReq
@@ -27,6 +30,22 @@ module Network.Wai.Middleware.Verbs
   , putReq
   , delete
   , deleteReq
+  , -- * Types
+    Verbs (..)
+  , Verb
+  , getVerb
+  , ResponseSpec
+  , HandleUpload
+  , RespondUpload
+  , supplyReq
+  , -- ** Monad Transformer
+    VerbListenerT (..)
+  , execVerbListenerT
+  , verbsToMiddleware
+  , mapVerbs
+  , -- * Utilities
+    lookupVerb
+  , lookupVerbM
   ) where
 
 
@@ -58,13 +77,18 @@ type RespondUpload e u r  = Request -> Either (Maybe e) u -> r
 
 type ResponseSpec e u m r = (HandleUpload e m u, RespondUpload e u r)
 
+-- | A map from an HTTP verb, to a responding and uploading mechanism.
 newtype Verbs e u m r = Verbs
   { unVerbs :: Map Verb (ResponseSpec e u m r)
   } deriving (Monoid)
 
+instance Functor (Verbs e u m) where
+  fmap f (Verbs xs) = Verbs $ (second (f .*)) <$> xs
+
 
 type Verb = StdMethod
 
+-- | Fetches the HTTP verb from the WAI @Request@ - defaults to GET.
 getVerb :: Request -> Verb
 getVerb req = fromMaybe GET $ httpMethodToMSym $ requestMethod req
   where
@@ -73,16 +97,13 @@ getVerb req = fromMaybe GET $ httpMethodToMSym $ requestMethod req
                        | x == methodPost   = Just POST
                        | x == methodPut    = Just PUT
                        | x == methodDelete = Just DELETE
-                       | otherwise        = Nothing
+                       | otherwise         = Nothing
 
 -- | @flip ($)@ for supplying a @Request@ into the two @ResponseSpec@ functions.
 supplyReq :: Request
           -> Map Verb (ResponseSpec e u m r)
           -> Map Verb (ExceptT (Maybe e) m u, Either (Maybe e) u -> r)
 supplyReq req xs = bimap ($ req) ($ req) <$> xs
-
-instance Functor (Verbs e u m) where
-  fmap f (Verbs xs) = Verbs $ (second (f .*)) <$> xs
 
 
 -- | Take a verb map and a request, and return the lookup after providing the request
