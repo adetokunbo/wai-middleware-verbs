@@ -24,7 +24,7 @@ Library
                       , mtl
                       , transformers
                       , wai
-                      , wai-transformers
+                      , wai-transformers >= 0.0.3
 
 Source-Repository head
   Type:                 git
