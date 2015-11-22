@@ -1,8 +1,10 @@
 {-# LANGUAGE
-    GeneralizedNewtypeDeriving
+    TupleSections
+  , FlexibleContexts
+  , StandaloneDeriving
   , ScopedTypeVariables
   , MultiParamTypeClasses
-  , TupleSections
+  , GeneralizedNewtypeDeriving
   #-}
 
 {-|
@@ -57,11 +59,19 @@ import           Data.Bifunctor
 import           Data.Map (Map)
 import qualified Data.Map                             as Map
 import           Data.Monoid
+import           Control.Applicative
 import           Control.Monad.Trans
 import           Control.Monad.Trans.Maybe
 import           Control.Monad.State hiding (get, put)
 import qualified Control.Monad.State                  as S
+import           Control.Monad.Reader
+import           Control.Monad.Writer
+import           Control.Monad.Cont
+import           Control.Monad.Base
+import           Control.Monad.Catch
+import           Control.Monad.Trans.Resource
 import           Control.Monad.Except
+import           Control.Monad.Logger
 import           Control.Error
 
 
@@ -129,12 +139,13 @@ lookupVerbM v req vmap = runMaybeT $ do
 -- last two parts of the monad transformer.
 newtype VerbListenerT r e u m a =
   VerbListenerT { runVerbListenerT :: StateT (Verbs e u m r) m a }
-    deriving ( Functor
-             , Applicative
-             , Monad
-             , MonadState (Verbs e u m r)
-             , MonadIO
+    deriving ( Functor, Applicative, Alternative, Monad, MonadFix, MonadPlus
+             , MonadState (Verbs e u m r), MonadWriter w, MonadReader r, MonadIO
+             , MonadError e', MonadCont, MonadBase b, MonadThrow, MonadCatch
+             , MonadMask, MonadLogger
              )
+
+deriving instance (MonadResource m, MonadBase IO m) => MonadResource (VerbListenerT r e u m)
 
 execVerbListenerT :: Monad m => VerbListenerT r e u m a -> m (Verbs e u m r)
 execVerbListenerT xs = execStateT (runVerbListenerT xs) mempty
