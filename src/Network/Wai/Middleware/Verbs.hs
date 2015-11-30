@@ -167,6 +167,7 @@ tell' x = do
   xs <- S.get
   S.put $ xs <> x
 
-mapVerbs :: Functor m => (r -> s) -> (s -> r) -> VerbListenerT r m a -> VerbListenerT s m a
-mapVerbs f g (VerbListenerT xs) = VerbListenerT $ StateT $ \s -> do
-  second (fmap (second f)) <$> runStateT xs (fmap (second g) s)
+mapVerbs :: Monad m => (r -> s) ->  VerbListenerT r m () -> VerbListenerT s m ()
+mapVerbs f xs = do
+  vmap <- lift $ execVerbListenerT xs
+  tell' $ second f <$> vmap
