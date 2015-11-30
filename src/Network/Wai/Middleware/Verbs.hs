@@ -4,6 +4,7 @@
   , StandaloneDeriving
   , ScopedTypeVariables
   , MultiParamTypeClasses
+  , UndecidableInstances
   , GeneralizedNewtypeDeriving
   #-}
 
@@ -25,37 +26,25 @@ turning it directly into a WAI @MiddlewareT@.
 module Network.Wai.Middleware.Verbs
   ( -- * Combinators
     get
-  , getReq
   , post
-  , postReq
   , put
-  , putReq
   , delete
-  , deleteReq
   , -- * Types
-    Verbs (..)
+    VerbMap
   , Verb
   , getVerb
-  , ResponseSpec
-  , HandleUpload
-  , RespondUpload
-  , supplyReq
   , -- ** Monad Transformer
     VerbListenerT (..)
   , execVerbListenerT
   , verbsToMiddleware
-  , mapVerbs
   , -- * Utilities
     lookupVerb
-  , lookupVerbM
   ) where
 
 
 import           Network.Wai.Trans
 import           Network.HTTP.Types
 
-import           Data.Function.Syntax
-import           Data.Bifunctor
 import           Data.Map (Map)
 import qualified Data.Map                             as Map
 import           Data.Monoid
@@ -77,24 +66,8 @@ import           Control.Error
 
 -- * Types
 
--- | Given a request, either throw a possibly existent error, or create some
--- upload result.
-type HandleUpload e m u   = Request -> ExceptT (Maybe e) m u
-
--- | Given a request and the potential result of handling an upload, return a
--- response (usually @Middleware@).
-type RespondUpload e u r  = Request -> Either (Maybe e) u -> r
-
-type ResponseSpec e u m r = (HandleUpload e m u, RespondUpload e u r)
-
--- | A map from an HTTP verb, to a responding and uploading mechanism.
-newtype Verbs e u m r = Verbs
-  { unVerbs :: Map Verb (ResponseSpec e u m r)
-  } deriving (Monoid)
-
-instance Functor (Verbs e u m) where
-  fmap f (Verbs xs) = Verbs $ (second (f .*)) <$> xs
-
+-- | A map from an HTTP verb, to a result and uploading method.
+type VerbMap m = Map Verb (Request -> m (), MiddlewareT m)
 
 type Verb = StdMethod
 
@@ -109,27 +82,12 @@ getVerb req = fromMaybe GET $ httpMethodToMSym $ requestMethod req
                        | x == methodDelete = Just DELETE
                        | otherwise         = Nothing
 
--- | @flip ($)@ for supplying a @Request@ into the two @ResponseSpec@ functions.
-supplyReq :: Request
-          -> Map Verb (ResponseSpec e u m r)
-          -> Map Verb (ExceptT (Maybe e) m u, Either (Maybe e) u -> r)
-supplyReq req xs = bimap ($ req) ($ req) <$> xs
-
-
--- | Take a verb map and a request, and return the lookup after providing the request
--- (for upload cases).
-lookupVerb :: Verb
-           -> Request
-           -> Verbs e u m r
-           -> Maybe (ExceptT (Maybe e) m u, Either (Maybe e) u -> r)
-lookupVerb v req vmap = Map.lookup v $ supplyReq req $ unVerbs vmap
-
--- | Take the monadic partial result of @lookupVerb@, and actually handle the upload.
-lookupVerbM :: Monad m => Verb -> Request -> Verbs e u m r -> m (Maybe r)
-lookupVerbM v req vmap = runMaybeT $ do
-  (uploadT, result) <- hoistMaybe $ lookupVerb v req vmap
-  eUpload <- lift $ runExceptT uploadT
-  return $ result eUpload
+-- | Take the monadic partial result of @lookupVerb@, and actually h the upload.
+lookupVerb :: Monad m => Request -> Verb -> VerbMap m -> m (Maybe (MiddlewareT m))
+lookupVerb req v vmap = runMaybeT $ do
+  (upload, result) <- hoistMaybe $ Map.lookup v vmap
+  lift (upload req)
+  return result
 
 
 -- * Verb Writer
@@ -137,107 +95,69 @@ lookupVerbM v req vmap = runMaybeT $ do
 -- | The type variables are @r@ for the result, @e@ for the error type throwable
 -- during uploading, @u@ is the sucessful upload type, and @m@ and @a@ form the
 -- last two parts of the monad transformer.
-newtype VerbListenerT r e u m a =
-  VerbListenerT { runVerbListenerT :: StateT (Verbs e u m r) m a }
+newtype VerbListenerT m a =
+  VerbListenerT { runVerbListenerT :: StateT (VerbMap m) m a }
     deriving ( Functor, Applicative, Alternative, Monad, MonadFix, MonadPlus
-             , MonadState (Verbs e u m r), MonadWriter w, MonadReader r, MonadIO
+             , MonadState (VerbMap m), MonadWriter w, MonadReader r, MonadIO
              , MonadError e', MonadCont, MonadBase b, MonadThrow, MonadCatch
              , MonadMask, MonadLogger
              )
 
-deriving instance (MonadResource m, MonadBase IO m) => MonadResource (VerbListenerT r e u m)
+deriving instance (MonadResource m, MonadBase IO m) => MonadResource (VerbListenerT m)
 
-execVerbListenerT :: Monad m => VerbListenerT r e u m a -> m (Verbs e u m r)
+execVerbListenerT :: Monad m => VerbListenerT m a -> m (VerbMap m)
 execVerbListenerT xs = execStateT (runVerbListenerT xs) mempty
 
 
-instance MonadTrans (VerbListenerT r e u) where
-  lift ma = VerbListenerT $ lift ma
+instance MonadTrans VerbListenerT where
+  lift = VerbListenerT . lift -- uses StateT
 
 
 -- | Turn a map from HTTP verbs to middleware, into a middleware.
 verbsToMiddleware :: MonadIO m =>
-                     VerbListenerT (MiddlewareT m) e u m ()
+                     VerbListenerT m ()
                   -> MiddlewareT m
 verbsToMiddleware vl app req respond = do
   let v = getVerb req
   vmap <- execVerbListenerT vl
-  mMiddleware <- lookupVerbM v req vmap
-  fromMaybe (app req respond) $ do
-    middleware <- mMiddleware
-    return $ middleware app req respond
+  mMiddleware <- lookupVerb req v vmap
+  fromMaybe (app req respond) $
+    (\mid -> mid app req respond) <$> mMiddleware
 
-mapVerbs :: Monad m =>
-            (a -> b)
-         -> VerbListenerT a e u m () -> VerbListenerT b e u m ()
-mapVerbs f vl = do
-  vmap <- lift $ execVerbListenerT vl
-  tell' $ f <$> vmap
 
 -- * Combinators
 
 -- | For simple @GET@ responses
 get :: ( Monad m
-       ) => r -> VerbListenerT r e u m ()
-get r = tell' $ Verbs $ Map.singleton GET ( const $ throwError Nothing
-                                          , const $ const r
-                                          )
-
--- | Inspect the @Request@ object supplied by WAI
-getReq :: ( Monad m
-          ) => (Request -> r) -> VerbListenerT r e u m ()
-getReq r = tell' $ Verbs $ Map.singleton GET ( const $ throwError Nothing
-                                             , const . r
-                                             )
-
+       ) => MiddlewareT m -> VerbListenerT m ()
+get r = tell' $ Map.singleton GET ( const $ return ()
+                                  , r
+                                  )
 
 -- | For simple @POST@ responses
 post :: ( Monad m
-        , MonadIO m
-        ) => HandleUpload e m u -> (Either (Maybe e) u -> r) -> VerbListenerT r e u m ()
-post handle r = tell' $ Verbs $ Map.singleton POST ( handle
-                                                   , const r
-                                                   )
-
--- | Inspect the @Request@ object supplied by WAI
-postReq :: ( Monad m
-           , MonadIO m
-           ) => HandleUpload e m u -> RespondUpload e u r -> VerbListenerT r e u m ()
-postReq handle r = tell' $ Verbs $ Map.singleton POST ( handle
-                                                      , r
-                                                      )
-
+        ) => (Request -> m ()) -- Handle upload
+          -> MiddlewareT m
+          -> VerbListenerT m ()
+post h r = tell' $ Map.singleton POST ( h
+                                      , r
+                                      )
 
 -- | For simple @PUT@ responses
 put :: ( Monad m
-       , MonadIO m
-       ) => HandleUpload e m u -> (Either (Maybe e) u -> r) -> VerbListenerT r e u m ()
-put handle r = tell' $ Verbs $ Map.singleton PUT ( handle
-                                                 , const r
-                                                 )
-
--- | Inspect the @Request@ object supplied by WAI
-putReq :: ( Monad m
-          , MonadIO m
-          ) => HandleUpload e m u -> RespondUpload e u r -> VerbListenerT r e u m ()
-putReq handle r = tell' $ Verbs $ Map.singleton PUT ( handle
-                                                    , r
-                                                    )
-
+       ) => (Request -> m ()) -- Handle upload
+         -> MiddlewareT m
+         -> VerbListenerT m ()
+put h r = tell' $ Map.singleton PUT ( h
+                                    , r
+                                    )
 
 -- | For simple @DELETE@ responses
 delete :: ( Monad m
-          ) => r -> VerbListenerT r e u m ()
-delete r = tell' $ Verbs $ Map.singleton DELETE ( const $ throwError Nothing
-                                                , const $ const r
-                                                )
-
--- | Inspect the @Request@ object supplied by WAI
-deleteReq :: ( Monad m
-             ) => (Request -> r) -> VerbListenerT r e u m ()
-deleteReq r = tell' $ Verbs $ Map.singleton DELETE ( const $ throwError Nothing
-                                                   , const . r
-                                                   )
+          ) => MiddlewareT m -> VerbListenerT m ()
+delete r = tell' $ Map.singleton DELETE ( const $ return ()
+                                        , r
+                                        )
 
 
 tell' :: (Monoid w, MonadState w m) => w -> m ()
