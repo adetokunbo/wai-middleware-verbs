@@ -16,11 +16,21 @@ Maintainer  : athan.clark@gmail.com
 Stability   : experimental
 Portability : POSIX
 
-This module provides everything you need to route based off different HTTP verbs.
-The <#g:1 Combinators> section defines the @get@, @post@ and other functions you would
-expect in a toolset like this. Likewise, we also include tools for manually
-looking into the <#t:VerbListenerT VerbListenerT> object constructed from the combinators, and
-turning it directly into a WAI @MiddlewareT@.
+This module provides everything you need to respond depending on an HTTP verbs.
+The <#g:1 Combinators> section defines the 'get', 'post' and other functions you would
+expect in a toolset like this. The 'VerbListenerT' object is constructed from the
+combinators, and turning it directly into a WAI 'Network.Wai.Trans.MiddlewareT'
+is easy with 'verbsToMiddleware'.
+
+> myApp :: MonadIO => MiddlewareT m
+> myApp = verbsToMiddleware $ do
+>   get myMiddleware1
+>   put uploader myMiddleware2
+>   post uploader myMiddleware3
+>   delete myMiddleware4
+>   where
+>     uploader :: MonadIO m => Request -> m ()
+>     uploader req = liftIO $ print =<< getStrictRequestBody req
 -}
 
 module Network.Wai.Middleware.Verbs
@@ -94,9 +104,17 @@ lookupVerb req v vmap = runMaybeT $ do
 
 -- * Verb Writer
 
--- | The type variables are @r@ for the result, @e@ for the error type throwable
--- during uploading, @u@ is the sucessful upload type, and @m@ and @a@ form the
--- last two parts of the monad transformer.
+-- | This is the monad for our DSL - where @r@ is the result type. We leave this
+--   polymorphic for 'Web.Routes.Nested.ActionT' for <https://hackage.haskell.org/package/nested-routes nested-routes>.
+--
+--   > myListener :: MonadIO m => VerbListenerT (MiddlewareT m) m ()
+--   > myListener = do
+--   >   get myMiddleware1
+--   >   post uploader myMiddleware2
+--   >   where
+--   >     uploader :: MonadIO Request -> m ()
+--   >     uploader req =
+--   >       liftIO $ print =<< strictRequestBody req
 newtype VerbListenerT r m a =
   VerbListenerT { runVerbListenerT :: StateT (VerbMap m r) m a }
     deriving ( Functor, Applicative, Alternative, Monad, MonadFix, MonadPlus
