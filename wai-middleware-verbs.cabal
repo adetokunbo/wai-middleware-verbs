@@ -21,6 +21,7 @@ Library
                       , errors
                       , http-types
                       , monad-logger
+                      , mmorph
                       , mtl
                       , resourcet
                       , transformers

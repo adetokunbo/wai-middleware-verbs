@@ -39,6 +39,7 @@ module Network.Wai.Middleware.Verbs
   , verbsToMiddleware
   , -- * Utilities
     lookupVerb
+  , mapVerbs
   ) where
 
 
@@ -48,6 +49,7 @@ import           Network.HTTP.Types
 import           Data.Map (Map)
 import qualified Data.Map                             as Map
 import           Data.Monoid
+import           Control.Arrow (second)
 import           Control.Applicative
 import           Control.Monad.Trans
 import           Control.Monad.Trans.Maybe
@@ -67,7 +69,7 @@ import           Control.Error
 -- * Types
 
 -- | A map from an HTTP verb, to a result and uploading method.
-type VerbMap m = Map Verb (Request -> m (), MiddlewareT m)
+type VerbMap m r = Map Verb (Request -> m (), r)
 
 type Verb = StdMethod
 
@@ -83,7 +85,7 @@ getVerb req = fromMaybe GET $ httpMethodToMSym $ requestMethod req
                        | otherwise         = Nothing
 
 -- | Take the monadic partial result of @lookupVerb@, and actually h the upload.
-lookupVerb :: Monad m => Request -> Verb -> VerbMap m -> m (Maybe (MiddlewareT m))
+lookupVerb :: Monad m => Request -> Verb -> VerbMap m r -> m (Maybe r)
 lookupVerb req v vmap = runMaybeT $ do
   (upload, result) <- hoistMaybe $ Map.lookup v vmap
   lift (upload req)
@@ -95,27 +97,27 @@ lookupVerb req v vmap = runMaybeT $ do
 -- | The type variables are @r@ for the result, @e@ for the error type throwable
 -- during uploading, @u@ is the sucessful upload type, and @m@ and @a@ form the
 -- last two parts of the monad transformer.
-newtype VerbListenerT m a =
-  VerbListenerT { runVerbListenerT :: StateT (VerbMap m) m a }
+newtype VerbListenerT r m a =
+  VerbListenerT { runVerbListenerT :: StateT (VerbMap m r) m a }
     deriving ( Functor, Applicative, Alternative, Monad, MonadFix, MonadPlus
-             , MonadState (VerbMap m), MonadWriter w, MonadReader r, MonadIO
+             , MonadState (VerbMap m r), MonadWriter w, MonadReader r, MonadIO
              , MonadError e', MonadCont, MonadBase b, MonadThrow, MonadCatch
              , MonadMask, MonadLogger
              )
 
-deriving instance (MonadResource m, MonadBase IO m) => MonadResource (VerbListenerT m)
+deriving instance (MonadResource m, MonadBase IO m) => MonadResource (VerbListenerT r m)
 
-execVerbListenerT :: Monad m => VerbListenerT m a -> m (VerbMap m)
+execVerbListenerT :: Monad m => VerbListenerT r m a -> m (VerbMap m r)
 execVerbListenerT xs = execStateT (runVerbListenerT xs) mempty
 
 
-instance MonadTrans VerbListenerT where
+instance MonadTrans (VerbListenerT r) where
   lift = VerbListenerT . lift -- uses StateT
 
 
 -- | Turn a map from HTTP verbs to middleware, into a middleware.
 verbsToMiddleware :: MonadIO m =>
-                     VerbListenerT m ()
+                     VerbListenerT (MiddlewareT m) m ()
                   -> MiddlewareT m
 verbsToMiddleware vl app req respond = do
   let v = getVerb req
@@ -129,7 +131,7 @@ verbsToMiddleware vl app req respond = do
 
 -- | For simple @GET@ responses
 get :: ( Monad m
-       ) => MiddlewareT m -> VerbListenerT m ()
+       ) => r -> VerbListenerT r m ()
 get r = tell' $ Map.singleton GET ( const $ return ()
                                   , r
                                   )
@@ -137,8 +139,8 @@ get r = tell' $ Map.singleton GET ( const $ return ()
 -- | For simple @POST@ responses
 post :: ( Monad m
         ) => (Request -> m ()) -- Handle upload
-          -> MiddlewareT m
-          -> VerbListenerT m ()
+          -> r
+          -> VerbListenerT r m ()
 post h r = tell' $ Map.singleton POST ( h
                                       , r
                                       )
@@ -146,15 +148,15 @@ post h r = tell' $ Map.singleton POST ( h
 -- | For simple @PUT@ responses
 put :: ( Monad m
        ) => (Request -> m ()) -- Handle upload
-         -> MiddlewareT m
-         -> VerbListenerT m ()
+         -> r
+         -> VerbListenerT r m ()
 put h r = tell' $ Map.singleton PUT ( h
                                     , r
                                     )
 
 -- | For simple @DELETE@ responses
 delete :: ( Monad m
-          ) => MiddlewareT m -> VerbListenerT m ()
+          ) => r -> VerbListenerT r m ()
 delete r = tell' $ Map.singleton DELETE ( const $ return ()
                                         , r
                                         )
@@ -164,3 +166,7 @@ tell' :: (Monoid w, MonadState w m) => w -> m ()
 tell' x = do
   xs <- S.get
   S.put $ xs <> x
+
+mapVerbs :: Functor m => (r -> s) -> (s -> r) -> VerbListenerT r m a -> VerbListenerT s m a
+mapVerbs f g (VerbListenerT xs) = VerbListenerT $ StateT $ \s -> do
+  second (fmap (second f)) <$> runStateT xs (fmap (second g) s)
