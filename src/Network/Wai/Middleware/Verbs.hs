@@ -95,7 +95,7 @@ instance Hashable Verb
 
 -- | Fetches the HTTP verb from the WAI @Request@ - defaults to GET.
 getVerb :: Request -> Verb
-getVerb req = fromMaybe GET $ httpMethodToMSym $ requestMethod req
+getVerb req = fromMaybe GET $ httpMethodToMSym (requestMethod req)
   where
     httpMethodToMSym :: Method -> Maybe Verb
     httpMethodToMSym x | x == methodGet    = Just GET
@@ -104,6 +104,8 @@ getVerb req = fromMaybe GET $ httpMethodToMSym $ requestMethod req
                        | x == methodDelete = Just DELETE
                        | otherwise         = Nothing
 
+{-# INLINEABLE getVerb #-}
+
 -- | Take the monadic partial result of @lookupVerb@, and actually h the upload.
 lookupVerb :: Monad m => Request -> Verb -> VerbMap m r -> m (Maybe r)
 lookupVerb req v vmap = runMaybeT $ do
@@ -111,6 +113,7 @@ lookupVerb req v vmap = runMaybeT $ do
   lift (upload req)
   return result
 
+{-# INLINEABLE lookupVerb #-}
 
 -- * Verb Writer
 
@@ -138,6 +141,7 @@ deriving instance (MonadResource m, MonadBase IO m) => MonadResource (VerbListen
 execVerbListenerT :: Monad m => VerbListenerT r m a -> m (VerbMap m r)
 execVerbListenerT xs = execStateT (runVerbListenerT xs) mempty
 
+{-# INLINEABLE execVerbListenerT #-}
 
 instance MonadTrans (VerbListenerT r) where
   lift = VerbListenerT . lift -- uses StateT
@@ -154,46 +158,58 @@ verbsToMiddleware vl app req respond = do
   fromMaybe (app req respond) $
     (\mid -> mid app req respond) <$> mMiddleware
 
+{-# INLINEABLE verbsToMiddleware #-}
 
 -- * Combinators
 
 -- | For simple @GET@ responses
 get :: ( Monad m
        ) => r -> VerbListenerT r m ()
-get r = tell' $ HM.singleton GET ( const $ return ()
-                                 , r
-                                 )
+get r = tell' $! HM.singleton GET ( const $ return ()
+                                  , r
+                                  )
+
+{-# INLINEABLE get #-}
 
 -- | For simple @POST@ responses
 post :: ( Monad m
         ) => (Request -> m ()) -- Handle upload
           -> r
           -> VerbListenerT r m ()
-post h r = tell' $ HM.singleton POST ( h
-                                     , r
-                                     )
+post h r = tell' $! HM.singleton POST ( h
+                                      , r
+                                      )
+
+{-# INLINEABLE post #-}
 
 -- | For simple @PUT@ responses
 put :: ( Monad m
        ) => (Request -> m ()) -- Handle upload
          -> r
          -> VerbListenerT r m ()
-put h r = tell' $ HM.singleton PUT ( h
-                                   , r
-                                   )
+put h r = tell' $! HM.singleton PUT ( h
+                                    , r
+                                    )
+
+{-# INLINEABLE put #-}
 
 -- | For simple @DELETE@ responses
 delete :: ( Monad m
           ) => r -> VerbListenerT r m ()
-delete r = tell' $ HM.singleton DELETE ( const $ return ()
-                                       , r
-                                       )
+delete r = tell' $! HM.singleton DELETE ( const $ return ()
+                                        , r
+                                        )
 
+{-# INLINEABLE delete #-}
 
 tell' :: (Monoid w, MonadState w m) => w -> m ()
 tell' x = modify' (<> x)
+
+{-# INLINEABLE tell' #-}
 
 mapVerbs :: Monad m => (r -> s) ->  VerbListenerT r m () -> VerbListenerT s m ()
 mapVerbs f xs = do
   vmap <- lift $ execVerbListenerT xs
   tell' $ second f <$> vmap
+
+{-# INLINEABLE mapVerbs #-}
