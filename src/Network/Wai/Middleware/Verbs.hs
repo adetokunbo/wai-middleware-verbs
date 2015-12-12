@@ -6,6 +6,8 @@
   , MultiParamTypeClasses
   , UndecidableInstances
   , GeneralizedNewtypeDeriving
+  , DeriveGeneric
+  , TypeSynonymInstances
   #-}
 
 {-|
@@ -56,9 +58,10 @@ module Network.Wai.Middleware.Verbs
 import           Network.Wai.Trans
 import           Network.HTTP.Types
 
-import           Data.Map (Map)
-import qualified Data.Map                             as Map
+import           Data.HashMap.Lazy (HashMap)
+import qualified Data.HashMap.Lazy                    as HM
 import           Data.Monoid
+import           Data.Hashable
 import           Control.Arrow (second)
 import           Control.Applicative
 import           Control.Monad.Trans
@@ -75,13 +78,20 @@ import           Control.Monad.Except
 import           Control.Monad.Logger
 import           Control.Error
 
+import           GHC.Generics
+
 
 -- * Types
 
 -- | A map from an HTTP verb, to a result and uploading method.
-type VerbMap m r = Map Verb (Request -> m (), r)
+type VerbMap m r = HashMap Verb (Request -> m (), r)
 
 type Verb = StdMethod
+
+deriving instance Generic Verb
+
+instance Hashable Verb
+
 
 -- | Fetches the HTTP verb from the WAI @Request@ - defaults to GET.
 getVerb :: Request -> Verb
@@ -97,7 +107,7 @@ getVerb req = fromMaybe GET $ httpMethodToMSym $ requestMethod req
 -- | Take the monadic partial result of @lookupVerb@, and actually h the upload.
 lookupVerb :: Monad m => Request -> Verb -> VerbMap m r -> m (Maybe r)
 lookupVerb req v vmap = runMaybeT $ do
-  (upload, result) <- hoistMaybe $ Map.lookup v vmap
+  (upload, result) <- hoistMaybe $ HM.lookup v vmap
   lift (upload req)
   return result
 
@@ -115,9 +125,9 @@ lookupVerb req v vmap = runMaybeT $ do
 --   >     uploader :: MonadIO Request -> m ()
 --   >     uploader req =
 --   >       liftIO $ print =<< strictRequestBody req
-newtype VerbListenerT r m a =
-  VerbListenerT { runVerbListenerT :: StateT (VerbMap m r) m a }
-    deriving ( Functor, Applicative, Alternative, Monad, MonadFix, MonadPlus
+newtype VerbListenerT r m a = VerbListenerT
+  { runVerbListenerT :: StateT (VerbMap m r) m a
+  } deriving ( Functor, Applicative, Alternative, Monad, MonadFix, MonadPlus
              , MonadState (VerbMap m r), MonadWriter w, MonadReader r, MonadIO
              , MonadError e', MonadCont, MonadBase b, MonadThrow, MonadCatch
              , MonadMask, MonadLogger
@@ -150,40 +160,38 @@ verbsToMiddleware vl app req respond = do
 -- | For simple @GET@ responses
 get :: ( Monad m
        ) => r -> VerbListenerT r m ()
-get r = tell' $ Map.singleton GET ( const $ return ()
-                                  , r
-                                  )
+get r = tell' $ HM.singleton GET ( const $ return ()
+                                 , r
+                                 )
 
 -- | For simple @POST@ responses
 post :: ( Monad m
         ) => (Request -> m ()) -- Handle upload
           -> r
           -> VerbListenerT r m ()
-post h r = tell' $ Map.singleton POST ( h
-                                      , r
-                                      )
+post h r = tell' $ HM.singleton POST ( h
+                                     , r
+                                     )
 
 -- | For simple @PUT@ responses
 put :: ( Monad m
        ) => (Request -> m ()) -- Handle upload
          -> r
          -> VerbListenerT r m ()
-put h r = tell' $ Map.singleton PUT ( h
-                                    , r
-                                    )
+put h r = tell' $ HM.singleton PUT ( h
+                                   , r
+                                   )
 
 -- | For simple @DELETE@ responses
 delete :: ( Monad m
           ) => r -> VerbListenerT r m ()
-delete r = tell' $ Map.singleton DELETE ( const $ return ()
-                                        , r
-                                        )
+delete r = tell' $ HM.singleton DELETE ( const $ return ()
+                                       , r
+                                       )
 
 
 tell' :: (Monoid w, MonadState w m) => w -> m ()
-tell' x = do
-  xs <- S.get
-  S.put $ xs <> x
+tell' x = modify' (<> x)
 
 mapVerbs :: Monad m => (r -> s) ->  VerbListenerT r m () -> VerbListenerT s m ()
 mapVerbs f xs = do
