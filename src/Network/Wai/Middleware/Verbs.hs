@@ -44,18 +44,17 @@ module Network.Wai.Middleware.Verbs
   , -- * Types
     VerbMap
   , Verb
-  , getVerb
   , -- ** Monad Transformer
     VerbListenerT (..)
   , execVerbListenerT
-  , verbsToMiddleware
   , -- * Utilities
     lookupVerb
+  , getVerb
   , mapVerbs
   ) where
 
 
-import           Network.Wai.Trans
+import           Network.Wai (Request (..))
 import           Network.HTTP.Types
 
 import           Data.HashMap.Lazy (HashMap)
@@ -115,6 +114,7 @@ lookupVerb req v vmap = runMaybeT $ do
 
 {-# INLINEABLE lookupVerb #-}
 
+
 -- * Verb Writer
 
 -- | This is the monad for our DSL - where @r@ is the result type. We leave this
@@ -143,22 +143,10 @@ execVerbListenerT xs = execStateT (runVerbListenerT xs) mempty
 
 {-# INLINEABLE execVerbListenerT #-}
 
+
 instance MonadTrans (VerbListenerT r) where
   lift = VerbListenerT . lift -- uses StateT
 
-
--- | Turn a map from HTTP verbs to middleware, into a middleware.
-verbsToMiddleware :: MonadIO m =>
-                     VerbListenerT (MiddlewareT m) m ()
-                  -> MiddlewareT m
-verbsToMiddleware vl app req respond = do
-  let v = getVerb req
-  vmap <- execVerbListenerT vl
-  mMiddleware <- lookupVerb req v vmap
-  fromMaybe (app req respond) $
-    (\mid -> mid app req respond) <$> mMiddleware
-
-{-# INLINEABLE verbsToMiddleware #-}
 
 -- * Combinators
 

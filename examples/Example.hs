@@ -16,8 +16,9 @@ import Control.Monad.IO.Class
 import Control.Monad.Catch
 
 
-theEmbeddedApp :: MonadIO m => LT.Text -> MiddlewareT m
-theEmbeddedApp v _ _ respond =
+theEmbeddedApp :: ( MonadIO m
+                  ) => LT.Text -> ApplicationT m
+theEmbeddedApp v _ respond =
   respond $ textOnly $ v <> " Verb accepted!"
 
 
@@ -28,7 +29,7 @@ instance Exception UploadError
 
 myListener :: ( MonadIO m
               , MonadThrow m
-              ) => VerbListenerT (MiddlewareT m) m ()
+              ) => VerbListenerT (ApplicationT m) m ()
 myListener = do
   get                $ theEmbeddedApp "GET"
   put  uploadFail    $ theEmbeddedApp "PUT" -- should never work
@@ -38,8 +39,9 @@ myListener = do
     uploadFail    _ = throwM UploadFailed
     uploadSucceed _ = return ()
 
-handleError :: UploadError -> MiddlewareT m
-handleError UploadFailed _ _ respond =
+handleError :: ( MonadIO m
+               ) => UploadError -> ApplicationT m
+handleError UploadFailed _ respond =
   respond $ textOnly "Upload Failed!"
 
 
@@ -47,8 +49,15 @@ myApp :: ( MonadIO m
          , MonadCatch m
          ) => MiddlewareT m
 myApp app req respond =
-          (verbsToMiddleware myListener app req respond)
-  `catch` (\e -> handleError e app req respond)
+  findResponse `catch` (\e -> handleError e req respond)
+  where
+    findResponse = do
+      let v = getVerb req
+      xs <- execVerbListenerT myListener
+      mr <- lookupVerb req v xs
+      case mr of
+        Nothing -> app req respond
+        Just r  -> r req respond
 
 
 main :: IO ()
