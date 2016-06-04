@@ -9,6 +9,7 @@ import Network.Wai.Handler.Warp
 import Network.Wai.Middleware.Verbs
 import Network.Wai.Middleware.ContentType (textOnly)
 import Network.Wai.Trans
+import Network.HTTP.Types
 import qualified Data.Text.Lazy as LT
 import Data.Monoid
 import Data.Typeable
@@ -19,7 +20,7 @@ import Control.Monad.Catch
 theEmbeddedApp :: ( MonadIO m
                   ) => LT.Text -> ApplicationT m
 theEmbeddedApp v _ respond =
-  respond $ textOnly $ v <> " Verb accepted!"
+  respond $ textOnly (v <> " Verb accepted!") status200 []
 
 
 data UploadError = UploadFailed
@@ -31,10 +32,12 @@ myListener :: ( MonadIO m
               , MonadThrow m
               ) => VerbListenerT (ApplicationT m) m ()
 myListener = do
-  get                $ theEmbeddedApp "GET"
-  put  uploadFail    $ theEmbeddedApp "PUT" -- should never work
-  post uploadSucceed $ theEmbeddedApp "POST"
-  delete             $ theEmbeddedApp "DELETE"
+  get    $ theEmbeddedApp "GET"
+  put    $ readingRequest uploadFail
+         $ theEmbeddedApp "PUT" -- should never work
+  post   $ readingRequest uploadSucceed
+         $ theEmbeddedApp "POST"
+  delete $ theEmbeddedApp "DELETE"
   where
     uploadFail    _ = throwM UploadFailed
     uploadSucceed _ = return ()
@@ -42,7 +45,7 @@ myListener = do
 handleError :: ( MonadIO m
                ) => UploadError -> ApplicationT m
 handleError UploadFailed _ respond =
-  respond $ textOnly "Upload Failed!"
+  respond $ textOnly "Upload Failed!" status500 []
 
 
 myApp :: ( MonadIO m
@@ -52,10 +55,8 @@ myApp app req respond =
   findResponse `catch` (\e -> handleError e req respond)
   where
     findResponse = do
-      let v = getVerb req
       xs <- execVerbListenerT myListener
-      mr <- lookupVerb req v xs
-      case mr of
+      case lookupVerb (getVerb req) xs of
         Nothing -> app req respond
         Just r  -> r req respond
 
@@ -64,7 +65,6 @@ main :: IO ()
 main = run 3000 (myApp defApp)
   where
     defApp :: Application
-    defApp _ respond =
-      respond $ textOnly "404"
+    defApp _ respond = respond $ textOnly "404" status404 []
 
 
