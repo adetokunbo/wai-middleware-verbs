@@ -83,7 +83,7 @@ import           GHC.Generics
 -- * Types
 
 -- | A map from an HTTP verb, to a result and uploading method.
-type VerbMap m r = HashMap Verb (Request -> m (), r)
+type VerbMap r = HashMap Verb r
 
 type Verb = StdMethod
 
@@ -106,11 +106,8 @@ getVerb req = fromMaybe GET $ httpMethodToMSym (requestMethod req)
 {-# INLINEABLE getVerb #-}
 
 -- | Take the monadic partial result of @lookupVerb@, and actually h the upload.
-lookupVerb :: Monad m => Request -> Verb -> VerbMap m r -> m (Maybe r)
-lookupVerb req v vmap = runMaybeT $ do
-  (upload, result) <- hoistMaybe $ HM.lookup v vmap
-  lift (upload req)
-  return result
+lookupVerb :: Verb -> VerbMap r -> Maybe r
+lookupVerb = HM.lookup
 
 {-# INLINEABLE lookupVerb #-}
 
@@ -129,16 +126,16 @@ lookupVerb req v vmap = runMaybeT $ do
 --   >     uploader req =
 --   >       liftIO $ print =<< strictRequestBody req
 newtype VerbListenerT r m a = VerbListenerT
-  { runVerbListenerT :: StateT (VerbMap m r) m a
+  { runVerbListenerT :: StateT (VerbMap r) m a
   } deriving ( Functor, Applicative, Alternative, Monad, MonadFix, MonadPlus
-             , MonadState (VerbMap m r), MonadWriter w, MonadReader r, MonadIO
+             , MonadState (VerbMap r), MonadWriter w, MonadReader r, MonadIO
              , MonadError e', MonadCont, MonadBase b, MonadThrow, MonadCatch
              , MonadMask, MonadLogger
-             )
+             ) -- TODO: MonadControl
 
 deriving instance (MonadResource m, MonadBase IO m) => MonadResource (VerbListenerT r m)
 
-execVerbListenerT :: Monad m => VerbListenerT r m a -> m (VerbMap m r)
+execVerbListenerT :: Monad m => VerbListenerT r m a -> m (VerbMap r)
 execVerbListenerT xs = execStateT (runVerbListenerT xs) mempty
 
 {-# INLINEABLE execVerbListenerT #-}
@@ -153,40 +150,28 @@ instance MonadTrans (VerbListenerT r) where
 -- | For simple @GET@ responses
 get :: ( Monad m
        ) => r -> VerbListenerT r m ()
-get r = tell' $! HM.singleton GET ( const $ return ()
-                                  , r
-                                  )
+get r = tell' $! HM.singleton GET r
 
 {-# INLINEABLE get #-}
 
 -- | For simple @POST@ responses
 post :: ( Monad m
-        ) => (Request -> m ()) -- Handle upload
-          -> r
-          -> VerbListenerT r m ()
-post h r = tell' $! HM.singleton POST ( h
-                                      , r
-                                      )
+        ) => r -> VerbListenerT r m ()
+post r = tell' $! HM.singleton POST r
 
 {-# INLINEABLE post #-}
 
 -- | For simple @PUT@ responses
 put :: ( Monad m
-       ) => (Request -> m ()) -- Handle upload
-         -> r
-         -> VerbListenerT r m ()
-put h r = tell' $! HM.singleton PUT ( h
-                                    , r
-                                    )
+       ) => r -> VerbListenerT r m ()
+put r = tell' $! HM.singleton PUT r
 
 {-# INLINEABLE put #-}
 
 -- | For simple @DELETE@ responses
 delete :: ( Monad m
           ) => r -> VerbListenerT r m ()
-delete r = tell' $! HM.singleton DELETE ( const $ return ()
-                                        , r
-                                        )
+delete r = tell' $! HM.singleton DELETE r
 
 {-# INLINEABLE delete #-}
 
@@ -198,6 +183,6 @@ tell' x = modify' (<> x)
 mapVerbs :: Monad m => (r -> s) ->  VerbListenerT r m () -> VerbListenerT s m ()
 mapVerbs f xs = do
   vmap <- lift $ execVerbListenerT xs
-  tell' $ second f <$> vmap
+  tell' $ f <$> vmap
 
 {-# INLINEABLE mapVerbs #-}
