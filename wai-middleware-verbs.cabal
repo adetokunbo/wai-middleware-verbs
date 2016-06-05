@@ -59,9 +59,8 @@ Executable example
                       , unordered-containers
                       , wai
                       , wai-transformers >= 0.0.5
-                      , wai-middleware-content-type
+                      , wai-middleware-content-type >= 0.2.1
                       , warp
-  
 
 Source-Repository head
   Type:                 git
