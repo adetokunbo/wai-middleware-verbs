@@ -81,13 +81,7 @@ import           GHC.Generics
 -- * Types
 
 -- | A map from an HTTP verb, to a result and uploading method.
-newtype VerbMap r = VerbMap
-  { getVerbMap :: HashMap Verb r
-  } deriving (Functor)
-
-instance Monoid r => Monoid (VerbMap r) where
-  mempty = VerbMap mempty
-  mappend (VerbMap x) (VerbMap y) = VerbMap $ HM.unionWith (<>) x y
+type VerbMap r = HashMap Verb r
 
 type Verb = StdMethod
 
@@ -111,7 +105,7 @@ getVerb req = fromMaybe GET $ httpMethodToMSym (requestMethod req)
 
 -- | Take the monadic partial result of @lookupVerb@, and actually h the upload.
 lookupVerb :: Verb -> VerbMap r -> Maybe r
-lookupVerb v = HM.lookup v . getVerbMap
+lookupVerb = HM.lookup
 
 {-# INLINEABLE lookupVerb #-}
 
@@ -155,7 +149,7 @@ instance MonadTrans (VerbListenerT r) where
 get :: ( Monad m
        , Monoid r
        ) => r -> VerbListenerT r m ()
-get r = tell' . VerbMap $ HM.singleton GET r
+get r = tell' $ HM.singleton GET r
 
 {-# INLINEABLE get #-}
 
@@ -163,7 +157,7 @@ get r = tell' . VerbMap $ HM.singleton GET r
 post :: ( Monad m
         , Monoid r
         ) => r -> VerbListenerT r m ()
-post r = tell' . VerbMap $ HM.singleton POST r
+post r = tell' $ HM.singleton POST r
 
 {-# INLINEABLE post #-}
 
@@ -171,7 +165,7 @@ post r = tell' . VerbMap $ HM.singleton POST r
 put :: ( Monad m
        , Monoid r
        ) => r -> VerbListenerT r m ()
-put r = tell' . VerbMap $ HM.singleton PUT r
+put r = tell' $ HM.singleton PUT r
 
 {-# INLINEABLE put #-}
 
@@ -179,12 +173,12 @@ put r = tell' . VerbMap $ HM.singleton PUT r
 delete :: ( Monad m
           , Monoid r
           ) => r -> VerbListenerT r m ()
-delete r = tell' . VerbMap $ HM.singleton DELETE r
+delete r = tell' $ HM.singleton DELETE r
 
 {-# INLINEABLE delete #-}
 
-tell' :: (Monoid w, MonadState w m) => w -> m ()
-tell' x = modify' (<> x)
+tell' :: (Monoid r, MonadState (VerbMap r) m) => VerbMap r -> m ()
+tell' x = modify' (\y -> HM.unionWith (<>) y x)
 
 {-# INLINEABLE tell' #-}
 
