@@ -50,7 +50,6 @@ module Network.Wai.Middleware.Verbs
   , -- * Utilities
     lookupVerb
   , getVerb
-  , mapVerbs
   ) where
 
 
@@ -133,7 +132,7 @@ newtype VerbListenerT r m a = VerbListenerT
 
 deriving instance (MonadResource m, MonadBase IO m) => MonadResource (VerbListenerT r m)
 
-execVerbListenerT :: (Monad m, Monoid r) => VerbListenerT r m a -> m (VerbMap r)
+execVerbListenerT :: (Monad m) => VerbListenerT r m a -> m (VerbMap r)
 execVerbListenerT xs = execStateT (runVerbListenerT xs) mempty
 
 {-# INLINEABLE execVerbListenerT #-}
@@ -181,10 +180,3 @@ tell' :: (Monoid r, MonadState (VerbMap r) m) => VerbMap r -> m ()
 tell' x = modify' (\y -> HM.unionWith (<>) y x)
 
 {-# INLINEABLE tell' #-}
-
-mapVerbs :: (Monad m, Monoid r, Monoid s) => (r -> s) ->  VerbListenerT r m () -> VerbListenerT s m ()
-mapVerbs f xs = do
-  vmap <- lift $ execVerbListenerT xs
-  tell' $ f <$> vmap
-
-{-# INLINEABLE mapVerbs #-}
