@@ -2,10 +2,10 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 9c43d7c8db95eb21d2d5a3d86cdce709454c42de2d61fe27cb471a0c92115f4a
+-- hash: c44481a358f46e101abf15c73f7e9876073a1bd3f4cc3ad6bac1db9e7ce8cb25
 
 name:           wai-middleware-verbs
-version:        0.3.2.1
+version:        0.4.0
 synopsis:       Route Wai middlewares based on HTTP verbs
 description:    Please see the README on Github at <https://git.localcooking.com/tooling/wai-middleware-verbs#readme>
 category:       Web
@@ -36,6 +36,7 @@ library
   ghc-options: -Wall
   build-depends:
       base >=4.8 && <5
+    , bytestring
     , exceptions
     , hashable
     , http-types
@@ -47,4 +48,5 @@ library
     , transformers-base
     , unordered-containers
     , wai >=3.2.1
+    , wai-transformers >=0.1.0
   default-language: Haskell2010

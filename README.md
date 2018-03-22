@@ -19,16 +19,13 @@ import Network.Wai.Middleware.Verbs
 myMid1 :: MiddlewareT (ReaderT Env m)
 myMid2 :: Middleware
 
-uploader :: Request -> m (Maybe u)
-uploader _ = return Nothing
+uploadResponse :: ByteString -> MiddlewareT m
+uploadResponse _ = liftMiddleware myMid2
 
-uploadResponse :: Maybe u -> MiddlewareT m
-uploadResponse _ = liftMiddleware (\t -> runReaderT t config) myMid2
-
-verbRoutes :: VerbListenerT (MiddlewareT m) u m ()
+verbRoutes :: VerbListenerT (MiddlewareT m) m ()
 verbRoutes = do
   get myMid1
-  post uploader uploadResponse
+  post uploadResponse
 ```
 
 Then, to use your newly assembled verb-router, turn the Verbs into a Middleware:

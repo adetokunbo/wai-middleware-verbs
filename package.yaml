@@ -1,5 +1,5 @@
 name:                wai-middleware-verbs
-version:             0.3.2.1
+version:             0.4.0
 github:              "athanclark/wai-middleware-verbs"
 license:             BSD3
 author:              "Athan Clark"
@@ -24,6 +24,7 @@ description:         Please see the README on Github at <https://git.localcookin
 
 dependencies:
 - base >= 4.8 && < 5
+- bytestring
 - exceptions
 - hashable
 - http-types
@@ -35,6 +36,7 @@ dependencies:
 - transformers-base
 - unordered-containers
 - wai >= 3.2.1
+- wai-transformers >= 0.1.0
 
 library:
   source-dirs: src

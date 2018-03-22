@@ -1,6 +1,5 @@
 {-# LANGUAGE
-    TupleSections
-  , FlexibleContexts
+    FlexibleContexts
   , StandaloneDeriving
   , ScopedTypeVariables
   , MultiParamTypeClasses
@@ -48,12 +47,13 @@ module Network.Wai.Middleware.Verbs
     VerbListenerT (..)
   , execVerbListenerT
   , -- * Utilities
-    lookupVerb
-  , getVerb
+    getVerbFromRequest
+  , verbsToMiddleware
   ) where
 
 
-import           Network.Wai (Request (..))
+import           Network.Wai (Request, strictRequestBody, requestMethod)
+import           Network.Wai.Trans (MiddlewareT)
 import           Network.HTTP.Types (StdMethod (..), Method, methodDelete, methodPut, methodPost, methodGet)
 
 import           Data.HashMap.Lazy (HashMap)
@@ -61,10 +61,11 @@ import qualified Data.HashMap.Lazy                    as HM
 import           Data.Monoid ((<>))
 import           Data.Hashable (Hashable)
 import           Data.Maybe (fromMaybe)
+import qualified Data.ByteString.Lazy as LBS
 import           Control.Applicative (Alternative)
 import           Control.Monad (MonadPlus)
 import           Control.Monad.Fix (MonadFix)
-import           Control.Monad.IO.Class (MonadIO)
+import           Control.Monad.IO.Class (MonadIO (liftIO))
 import           Control.Monad.Trans (MonadTrans (lift))
 import           Control.Monad.State (MonadState, StateT (..), modify', execStateT)
 import           Control.Monad.Reader (MonadReader)
@@ -82,7 +83,7 @@ import           GHC.Generics (Generic)
 -- * Types
 
 -- | A map from an HTTP verb, to a result and uploading method.
-type VerbMap r = HashMap Verb r
+type VerbMap r = HashMap Verb (Either r (LBS.ByteString -> r))
 
 type Verb = StdMethod
 
@@ -91,9 +92,9 @@ deriving instance Generic Verb
 instance Hashable Verb
 
 
--- | Fetches the HTTP verb from the WAI @Request@ - defaults to GET.
-getVerb :: Request -> Verb
-getVerb req = fromMaybe GET $ httpMethodToMSym (requestMethod req)
+-- | Fetches the HTTP verb from the WAI 'Network.Wai.Request' - defaults to GET.
+getVerbFromRequest :: Request -> Verb
+getVerbFromRequest req = fromMaybe GET $ httpMethodToMSym (requestMethod req)
   where
     httpMethodToMSym :: Method -> Maybe Verb
     httpMethodToMSym x | x == methodGet    = Just GET
@@ -102,13 +103,7 @@ getVerb req = fromMaybe GET $ httpMethodToMSym (requestMethod req)
                        | x == methodDelete = Just DELETE
                        | otherwise         = Nothing
 
-{-# INLINEABLE getVerb #-}
-
--- | Take the monadic partial result of @lookupVerb@, and actually h the upload.
-lookupVerb :: Verb -> VerbMap r -> Maybe r
-lookupVerb = HM.lookup
-
-{-# INLINEABLE lookupVerb #-}
+{-# INLINEABLE getVerbFromRequest #-}
 
 
 -- * Verb Writer
@@ -150,23 +145,23 @@ instance MonadTrans (VerbListenerT r) where
 get :: ( Monad m
        , Monoid r
        ) => r -> VerbListenerT r m ()
-get r = tell' $ HM.singleton GET r
+get r = tell' (HM.singleton GET (Left r))
 
 {-# INLINEABLE get #-}
 
 -- | For simple @POST@ responses
 post :: ( Monad m
         , Monoid r
-        ) => r -> VerbListenerT r m ()
-post r = tell' $ HM.singleton POST r
+        ) => (LBS.ByteString -> r) -> VerbListenerT r m ()
+post r = tell' (HM.singleton POST (Right r))
 
 {-# INLINEABLE post #-}
 
 -- | For simple @PUT@ responses
 put :: ( Monad m
        , Monoid r
-       ) => r -> VerbListenerT r m ()
-put r = tell' $ HM.singleton PUT r
+       ) => (LBS.ByteString -> r) -> VerbListenerT r m ()
+put r = tell' (HM.singleton PUT (Right r))
 
 {-# INLINEABLE put #-}
 
@@ -174,11 +169,31 @@ put r = tell' $ HM.singleton PUT r
 delete :: ( Monad m
           , Monoid r
           ) => r -> VerbListenerT r m ()
-delete r = tell' $ HM.singleton DELETE r
+delete r = tell' (HM.singleton DELETE (Left r))
 
 {-# INLINEABLE delete #-}
 
 tell' :: (Monoid r, MonadState (VerbMap r) m) => VerbMap r -> m ()
-tell' x = modify' (\y -> HM.unionWith (<>) y x)
+tell' z = modify' (\y -> HM.unionWith go y z)
+  where
+    go (Left x) (Left y) = Left (x <> y)
+    go (Right f) (Right g) = Right (\a -> f a <> g a)
+    go (Left x) (Right g) = Right (\a -> x <> g a)
+    go (Right f) (Left y) = Right (\a -> f a <> y)
 
 {-# INLINEABLE tell' #-}
+
+
+verbsToMiddleware :: MonadIO m
+                  => VerbListenerT (MiddlewareT m) m ()
+                  -> MiddlewareT m
+verbsToMiddleware vs app req resp = do
+  m <- execVerbListenerT vs
+  let v = getVerbFromRequest req
+  case HM.lookup v m of
+    Nothing -> app req resp
+    Just eR -> case eR of
+      Left x -> x app req resp
+      Right f -> do
+        body <- liftIO (strictRequestBody req)
+        f body app req resp
