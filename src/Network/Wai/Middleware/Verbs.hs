@@ -1,11 +1,14 @@
 {-# LANGUAGE
     FlexibleContexts
+  , FlexibleInstances
   , StandaloneDeriving
   , ScopedTypeVariables
   , MultiParamTypeClasses
   , UndecidableInstances
   , GeneralizedNewtypeDeriving
   , DeriveGeneric
+  , TypeFamilies
+  , Rank2Types
   , TypeSynonymInstances
   #-}
 
@@ -62,6 +65,7 @@ import           Data.Monoid ((<>))
 import           Data.Hashable (Hashable)
 import           Data.Maybe (fromMaybe)
 import qualified Data.ByteString.Lazy as LBS
+import           Data.Functor.Compose (Compose)
 import           Control.Applicative (Alternative)
 import           Control.Monad (MonadPlus)
 import           Control.Monad.Fix (MonadFix)
@@ -73,6 +77,8 @@ import           Control.Monad.Writer (MonadWriter)
 import           Control.Monad.Cont (MonadCont)
 import           Control.Monad.Base (MonadBase)
 import           Control.Monad.Catch (MonadCatch, MonadThrow, MonadMask)
+import           Control.Monad.Trans.Control (MonadBaseControl (..), MonadTransControl (..), ComposeSt, defaultLiftBaseWith, defaultRestoreM, defaultLiftWith, defaultRestoreT)
+import qualified Control.Monad.Trans.Control.Aligned as Aligned
 import           Control.Monad.Trans.Resource (MonadResource)
 import           Control.Monad.Except (MonadError)
 import           Control.Monad.Logger (MonadLogger)
@@ -126,6 +132,32 @@ newtype VerbListenerT r m a = VerbListenerT
              , MonadError e', MonadCont, MonadBase b, MonadThrow, MonadCatch
              , MonadMask, MonadLogger
              ) -- TODO: MonadControl
+
+instance MonadTransControl (VerbListenerT r) where
+  type StT (VerbListenerT r) a = StT (StateT (VerbMap r)) a
+  liftWith = defaultLiftWith VerbListenerT runVerbListenerT
+  restoreT = defaultRestoreT VerbListenerT
+
+instance MonadBaseControl b m => MonadBaseControl b (VerbListenerT r m) where
+  type StM (VerbListenerT r m) a = ComposeSt (VerbListenerT r) m a
+  liftBaseWith = defaultLiftBaseWith
+  restoreM = defaultRestoreM
+
+instance Aligned.MonadTransControl (VerbListenerT r) ((,) (VerbMap r)) where
+  liftWith client = VerbListenerT $ StateT $ \s ->
+    let run :: forall m a. Monad m => VerbListenerT r m a -> m (VerbMap r, a)
+        run (VerbListenerT (StateT g)) = do
+          (x,s') <- g s
+          pure (s',x)
+    in  do x <- client run
+           pure (x, s)
+  restoreT x = VerbListenerT $ StateT $ \_ -> do
+    (s,x') <- x
+    pure (x',s)
+
+instance Aligned.MonadBaseControl b m stM => Aligned.MonadBaseControl b (VerbListenerT r m) (Compose stM ((,) (VerbMap r))) where
+  liftBaseWith = Aligned.defaultLiftBaseWith
+  restoreM = Aligned.defaultRestoreM
 
 deriving instance (MonadResource m, MonadBase IO m) => MonadResource (VerbListenerT r m)
 

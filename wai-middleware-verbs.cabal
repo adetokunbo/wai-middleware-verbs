@@ -2,10 +2,10 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: c44481a358f46e101abf15c73f7e9876073a1bd3f4cc3ad6bac1db9e7ce8cb25
+-- hash: f14c8019769f9489e79ba3b8049d8713701d5409040452e0d132e0fabce07cad
 
 name:           wai-middleware-verbs
-version:        0.4.0
+version:        0.4.0.1
 synopsis:       Route Wai middlewares based on HTTP verbs
 description:    Please see the README on Github at <https://git.localcooking.com/tooling/wai-middleware-verbs#readme>
 category:       Web
@@ -41,6 +41,8 @@ library
     , hashable
     , http-types
     , mmorph
+    , monad-control
+    , monad-control-aligned
     , monad-logger
     , mtl
     , resourcet
