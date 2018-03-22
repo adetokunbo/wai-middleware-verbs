@@ -54,27 +54,29 @@ module Network.Wai.Middleware.Verbs
 
 
 import           Network.Wai (Request (..))
-import           Network.HTTP.Types
+import           Network.HTTP.Types (StdMethod (..), Method, methodDelete, methodPut, methodPost, methodGet)
 
 import           Data.HashMap.Lazy (HashMap)
 import qualified Data.HashMap.Lazy                    as HM
-import           Data.Monoid
-import           Data.Hashable
-import           Control.Applicative
-import           Control.Monad.Trans
-import           Control.Monad.State hiding (get, put)
-import qualified Control.Monad.State                  as S
-import           Control.Monad.Reader
-import           Control.Monad.Writer
-import           Control.Monad.Cont
-import           Control.Monad.Base
-import           Control.Monad.Catch
-import           Control.Monad.Trans.Resource
-import           Control.Monad.Except
-import           Control.Monad.Logger
-import           Control.Error
+import           Data.Monoid ((<>))
+import           Data.Hashable (Hashable)
+import           Data.Maybe (fromMaybe)
+import           Control.Applicative (Alternative)
+import           Control.Monad (MonadPlus)
+import           Control.Monad.Fix (MonadFix)
+import           Control.Monad.IO.Class (MonadIO)
+import           Control.Monad.Trans (MonadTrans (lift))
+import           Control.Monad.State (MonadState, StateT (..), modify', execStateT)
+import           Control.Monad.Reader (MonadReader)
+import           Control.Monad.Writer (MonadWriter)
+import           Control.Monad.Cont (MonadCont)
+import           Control.Monad.Base (MonadBase)
+import           Control.Monad.Catch (MonadCatch, MonadThrow, MonadMask)
+import           Control.Monad.Trans.Resource (MonadResource)
+import           Control.Monad.Except (MonadError)
+import           Control.Monad.Logger (MonadLogger)
 
-import           GHC.Generics
+import           GHC.Generics (Generic)
 
 
 -- * Types
